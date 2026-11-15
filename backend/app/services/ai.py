@@ -5,8 +5,8 @@ from typing import Any, Dict, List, Optional
 import requests
 from fastapi import HTTPException
 
-from backend.app.config import settings
-from backend.app.models import (
+from ..config import settings
+from ..models import (
     CoachRequest,
     CoachResponse,
     GenerateRequest,

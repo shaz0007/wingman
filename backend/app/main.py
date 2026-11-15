@@ -5,13 +5,13 @@ from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from backend.app.config import settings
-from backend.app.middleware import (
+from .config import settings
+from .middleware import (
     ProcessTimeMiddleware,
     RateLimiterMiddleware,
     SecurityHeadersMiddleware,
 )
-from backend.app.models import (
+from .models import (
     CoachRequest,
     CoachResponse,
     GenerateRequest,
@@ -20,8 +20,8 @@ from backend.app.models import (
     MessageResponse,
     TranscribeResponse,
 )
-from backend.app.services.ai import coach_service, generate_replies_service
-from backend.app.services.stt import transcribe_audio_service
+from .services.ai import coach_service, generate_replies_service
+from .services.stt import transcribe_audio_service
 
 # Configure structured logging
 logging.basicConfig(

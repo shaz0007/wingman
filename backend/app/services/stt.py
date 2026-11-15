@@ -3,8 +3,8 @@ from typing import Tuple
 from fastapi import HTTPException, UploadFile
 import requests
 
-from backend.app.config import settings
-from backend.app.models import TranscribeResponse
+from ..config import settings
+from ..models import TranscribeResponse
 
 logger = logging.getLogger("wingman.stt")
 
