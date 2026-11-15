@@ -1,8 +1,10 @@
-const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim();
+const configuredApiBaseUrl = (
+  import.meta.env.vite_api_base_url || import.meta.env.VITE_API_BASE_URL
+)?.trim();
 
 if (import.meta.env.PROD && !configuredApiBaseUrl) {
   throw new Error(
-    "VITE_API_BASE_URL is missing. Set it in the Vercel project environment variables and redeploy.",
+    "vite_api_base_url is missing. Set it in the Vercel project environment variables and redeploy.",
   );
 }
 
