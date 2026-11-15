@@ -1,9 +1,27 @@
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
-// Support the requested lowercase vite_api_base_url as well as Vite's standard VITE_* names.
-// Only variables with these explicit public prefixes are exposed to browser code.
+// https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
-  envPrefix: ['VITE_', 'vite_'],
+  server: {
+    port: 5173,
+    host: true,
+    proxy: {
+      '/api': {
+        target: process.env.VITE_BACKEND_URL || 'http://localhost:8000',
+        changeOrigin: true,
+      },
+      '/health': {
+        target: process.env.VITE_BACKEND_URL || 'http://localhost:8000',
+        changeOrigin: true,
+      },
+    },
+  },
+  build: {
+    target: 'esnext',
+    outDir: 'dist',
+    sourcemap: false,
+    chunkSizeWarningLimit: 600,
+  },
 })

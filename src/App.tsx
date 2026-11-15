@@ -1,57 +1,100 @@
-
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import "./App.css";
-import { apiUrl } from "./lib/api";
-
-interface Reply {
-  tone: string;
-  text: string;
-  explanation: string;
-}
+import {
+  api,
+  type CoachResponse,
+  type Reply,
+  type ToneType,
+} from "./services/api";
+import { countWords, formatSeconds } from "./utils/formatters";
 
 function App() {
+  const [activeTab, setActiveTab] = useState<"wingman" | "coach" | "voice">("wingman");
   const [message, setMessage] = useState("");
-  const [activeTab, setActiveTab] = useState("wingman");
-  const [tone, setTone] = useState("Natural");
+  const [tone, setTone] = useState<ToneType>("Natural");
 
-  const [connection, setConnection] = useState("Not tested");
-  const [testing, setTesting] = useState(false);
+  // Advanced context (collapsible)
+  const [showContext, setShowContext] = useState(false);
+  const [chatHistory, setChatHistory] = useState("");
+  const [theirProfile, setTheirProfile] = useState("");
+  const [myProfile, setMyProfile] = useState("");
+  const [myStyle, setMyStyle] = useState("");
 
-  // AI generation states
+  // Backend status
+  const [backendStatus, setBackendStatus] = useState<"checking" | "connected" | "disconnected">("checking");
+
+  // Wingman Reply Generation
   const [replies, setReplies] = useState<Reply[]>([]);
   const [generating, setGenerating] = useState(false);
   const [generationError, setGenerationError] = useState("");
   const [provider, setProvider] = useState("");
 
-  // Voice transcription states
+  // Coach Analysis
+  const [coachData, setCoachData] = useState<CoachResponse | null>(null);
+  const [coaching, setCoaching] = useState(false);
+  const [coachError, setCoachError] = useState("");
+
+  // Voice Notes & Recording
   const [audioFile, setAudioFile] = useState<File | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
+  const [recordedUrl, setRecordedUrl] = useState<string | null>(null);
   const [transcribing, setTranscribing] = useState(false);
   const [transcriptionStatus, setTranscriptionStatus] = useState("");
+  const [transcriptionResult, setTranscriptionResult] = useState<{
+    text: string;
+    language?: string;
+  } | null>(null);
 
-  // Test backend connection
-  const testBackend = async () => {
-    setTesting(true);
-    setConnection("Connecting...");
+  // Toast notifications
+  const [toast, setToast] = useState<{ message: string; type: "success" | "error" | "info" } | null>(null);
 
-    try {
-      const response = await fetch(apiUrl("/api/test"));
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const timerRef = useRef<number | null>(null);
 
-      if (!response.ok) {
-        throw new Error("Backend request failed");
-      }
-
-      const data = await response.json();
-      setConnection(data.message);
-    } catch (error) {
-      console.error("Backend error:", error);
-      setConnection("Backend connection failed");
-    } finally {
-      setTesting(false);
-    }
+  const showToast = (message: string, type: "success" | "error" | "info" = "success") => {
+    setToast({ message, type });
+    setTimeout(() => {
+      setToast((current) => (current?.message === message ? null : current));
+    }, 3200);
   };
 
-  // Generate replies using Gemini or Groq
-  const generateReplies = async () => {
+  // Check backend health on mount
+  useEffect(() => {
+    let isMounted = true;
+    api
+      .checkHealth()
+      .then((data) => {
+        if (isMounted) {
+          if (data.status === "healthy") {
+            setBackendStatus("connected");
+          } else {
+            setBackendStatus("disconnected");
+          }
+        }
+      })
+      .catch(() => {
+        if (isMounted) setBackendStatus("disconnected");
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // Cleanup audio preview URL on unmount or new recording
+  useEffect(() => {
+    return () => {
+      if (recordedUrl) {
+        URL.revokeObjectURL(recordedUrl);
+      }
+    };
+  }, [recordedUrl]);
+
+  // Handle Wingman Generation
+  const handleGenerate = async () => {
     if (!message.trim()) {
       setGenerationError("Please enter a conversation message first.");
       return;
@@ -60,122 +103,167 @@ function App() {
     setGenerating(true);
     setGenerationError("");
     setReplies([]);
-    setProvider("");
 
     try {
-      const response = await fetch(
-        apiUrl("/api/generate"),
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            message: message.trim(),
-            tone: tone
-          })
-        }
-      );
+      const response = await api.generateReplies({
+        message: message.trim(),
+        tone,
+        chat_history: chatHistory.trim() || undefined,
+        their_profile: theirProfile.trim() || undefined,
+        my_profile: myProfile.trim() || undefined,
+        my_style: myStyle.trim() || undefined,
+      });
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(
-          typeof data.detail === "string"
-            ? data.detail
-            : "Could not generate replies. Please try again."
-        );
-      }
-
-      if (!Array.isArray(data.replies) || data.replies.length !== 3) {
-        throw new Error("The AI did not return three valid replies.");
-      }
-
-      setReplies(data.replies);
-      setProvider(data.provider || "AI");
-    } catch (error) {
-      console.error("Reply generation error:", error);
-
-      setGenerationError(
-        error instanceof Error
-          ? error.message
-          : "Something went wrong. Please try again."
-      );
+      setReplies(response.replies);
+      setProvider(response.provider);
+      showToast("Generated 3 tailored replies!");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to generate replies.";
+      setGenerationError(msg);
+      showToast(msg, "error");
     } finally {
       setGenerating(false);
     }
   };
 
-  // Copy a suggested reply
-  const copyReply = async (text: string) => {
+  // Handle Coach Analysis
+  const handleCoach = async () => {
+    if (!message.trim()) {
+      setCoachError("Please paste a conversation snippet to analyze.");
+      return;
+    }
+
+    setCoaching(true);
+    setCoachError("");
+    setCoachData(null);
+
     try {
-      await navigator.clipboard.writeText(text);
-      alert("Reply copied!");
-    } catch (error) {
-      console.error("Copy failed:", error);
-      setGenerationError("Could not copy the reply. Please select it manually.");
+      const response = await api.coachConversation({
+        message: message.trim(),
+        chat_history: chatHistory.trim() || undefined,
+        context: theirProfile.trim() || undefined,
+      });
+
+      setCoachData(response);
+      showToast("Conversation analysis complete!");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Analysis failed.";
+      setCoachError(msg);
+      showToast(msg, "error");
+    } finally {
+      setCoaching(false);
     }
   };
 
-  // Transcribe voice note using Gnani Prisma
-  const transcribeAudio = async () => {
-    if (!audioFile) {
-      setTranscriptionStatus("Please select an audio file first.");
+  // Copy reply to clipboard
+  const copyReply = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast("Reply copied to clipboard!");
+    } catch {
+      showToast("Could not copy automatically. Please select text manually.", "error");
+    }
+  };
+
+  // Voice Recording Functions
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioChunksRef.current = [];
+      const recorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onstop = () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+        setRecordedBlob(audioBlob);
+        if (recordedUrl) URL.revokeObjectURL(recordedUrl);
+        setRecordedUrl(URL.createObjectURL(audioBlob));
+        // Stop all audio tracks
+        stream.getTracks().forEach((track) => track.stop());
+      };
+
+      recorder.start();
+      setIsRecording(true);
+      setRecordingDuration(0);
+      setTranscriptionStatus("");
+
+      timerRef.current = window.setInterval(() => {
+        setRecordingDuration((prev) => prev + 1);
+      }, 1000);
+    } catch (err) {
+      console.error("Microphone access error:", err);
+      showToast("Microphone permission denied or not supported.", "error");
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+    }
+  };
+
+  const handleTranscribe = async (targetBlob?: Blob, targetFilename?: string) => {
+    const fileToUpload = targetBlob || recordedBlob || audioFile;
+    if (!fileToUpload) {
+      setTranscriptionStatus("Please record or select an audio file first.");
       return;
     }
 
     setTranscribing(true);
-    setTranscriptionStatus("");
+    setTranscriptionStatus("Transcribing audio with Gnani Prisma STT...");
+    setTranscriptionResult(null);
 
     try {
-      const formData = new FormData();
-      formData.append("audio_file", audioFile);
+      const filename = targetFilename || (audioFile ? audioFile.name : "voice_note.webm");
+      const res = await api.transcribeAudio(fileToUpload, filename);
 
-      const response = await fetch(
-        apiUrl("/api/transcribe"),
-        {
-          method: "POST",
-          body: formData
-        }
-      );
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(
-          typeof data.detail === "string"
-            ? data.detail
-            : JSON.stringify(data.detail || "Transcription failed")
-        );
-      }
-
-      if (!data.transcript) {
-        throw new Error("No transcription was returned.");
-      }
-
-      setMessage(data.transcript);
-      setTranscriptionStatus(
-        `Transcription successful! Language: ${data.language || "Detected"}`
-      );
-
-      setReplies([]);
-      setGenerationError("");
-      setActiveTab("wingman");
-    } catch (error) {
-      console.error("Transcription error:", error);
-
-      setTranscriptionStatus(
-        error instanceof Error
-          ? error.message
-          : "Something went wrong during transcription."
-      );
+      setTranscriptionResult({
+        text: res.transcript,
+        language: res.language,
+      });
+      setTranscriptionStatus("Transcription completed successfully!");
+      showToast("Audio transcribed!");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Transcription failed.";
+      setTranscriptionStatus(`Error: ${msg}`);
+      showToast(msg, "error");
     } finally {
       setTranscribing(false);
     }
   };
 
+  const applyTranscription = (target: "wingman" | "coach") => {
+    if (transcriptionResult) {
+      setMessage(transcriptionResult.text);
+      setActiveTab(target);
+      showToast(`Transferred transcription to ${target === "wingman" ? "Wingman" : "Coach"}!`);
+    }
+  };
+
+
+
   return (
     <div className="app-shell">
+      {/* Toast Notification */}
+      {toast && (
+        <div className={`toast toast-${toast.type}`} role="status">
+          <span>{toast.type === "success" ? "✓" : toast.type === "error" ? "⚠" : "ℹ"}</span>
+          <p>{toast.message}</p>
+        </div>
+      )}
+
+      {/* Sidebar */}
       <aside className="sidebar">
         <div className="brand">
           <span className="brand-icon">w.</span>
@@ -185,62 +273,68 @@ function App() {
         <div className="sidebar-label">WORKSPACE</div>
 
         <button
-          className={`nav-item ${
-            activeTab === "wingman" ? "active" : ""
-          }`}
+          className={`nav-item ${activeTab === "wingman" ? "active" : ""}`}
           onClick={() => setActiveTab("wingman")}
         >
           <span>✳</span> Wingman
         </button>
 
         <button
-          className={`nav-item ${
-            activeTab === "coach" ? "active" : ""
-          }`}
+          className={`nav-item ${activeTab === "coach" ? "active" : ""}`}
           onClick={() => setActiveTab("coach")}
         >
           <span>◈</span> Coach
         </button>
 
         <button
-          className={`nav-item ${
-            activeTab === "voice" ? "active" : ""
-          }`}
+          className={`nav-item ${activeTab === "voice" ? "active" : ""}`}
           onClick={() => setActiveTab("voice")}
         >
           <span>◉</span> Voice notes
         </button>
 
         <div className="sidebar-bottom">
-          <div className="profile-avatar">S</div>
+          <div className="profile-avatar">W</div>
           <div>
-            <strong>Your space</strong>
-            <p>Personal account</p>
+            <strong>Wingman Suite</strong>
+            <p>Production Ready</p>
           </div>
         </div>
       </aside>
 
+      {/* Main Content Area */}
       <main className="main-content">
         <header className="topbar">
           <span>YOUR CONVERSATION SPACE</span>
 
           <div className="status">
-            <span className="status-dot"></span>
-            Your personal wingman
+            <span
+              className="status-dot"
+              style={{
+                background:
+                  backendStatus === "connected"
+                    ? "#22c55e"
+                    : backendStatus === "checking"
+                    ? "#eab308"
+                    : "#ef4444",
+              }}
+            ></span>
+            {backendStatus === "connected"
+              ? "Backend Active"
+              : backendStatus === "checking"
+              ? "Connecting..."
+              : "Backend Offline"}
           </div>
         </header>
 
+        {/* Hero Section */}
         <section className="hero">
-          <div className="eyebrow">
-            A LITTLE HELP WITH WORDS
-          </div>
-
+          <div className="eyebrow">A LITTLE HELP WITH WORDS</div>
           <h1>
             Good conversations
             <br />
             <span>start with you.</span>
           </h1>
-
           <p>
             Sometimes you know what you want to say.
             <br />
@@ -248,6 +342,7 @@ function App() {
           </p>
         </section>
 
+        {/* Workspace Container */}
         <section className="workspace">
           <div className="section-heading">
             <div>
@@ -258,264 +353,375 @@ function App() {
                   ? "Let's understand the conversation."
                   : "Let's work with your voice."}
               </h2>
-
               <p>
                 {activeTab === "wingman"
-                  ? "Share a message and we'll figure out a natural response."
+                  ? "Share a message and we'll generate 3 natural human responses."
                   : activeTab === "coach"
-                  ? "Explore the context and understand how to respond."
-                  : "Upload a voice note and let Prisma transcribe it."}
+                  ? "Understand subtext, mood, interest, and the best tactical strategy."
+                  : "Record live or upload an audio note to transcribe with Gnani Prisma STT."}
               </p>
             </div>
-
             <span className="sparkle">✳</span>
           </div>
 
-          {/* Voice note upload */}
+          {/* TAB 1: VOICE NOTES */}
           {activeTab === "voice" && (
-            <div className="composer">
-              <label>UPLOAD YOUR VOICE NOTE</label>
+            <div className="voice-container">
+              {/* Live Audio Recorder */}
+              <div className="composer voice-card">
+                <label>OPTION 1: RECORD LIVE AUDIO</label>
+                <div className="recorder-controls">
+                  {!isRecording ? (
+                    <button className="record-btn start-rec" onClick={startRecording}>
+                      <span className="rec-dot"></span> Record Voice Note
+                    </button>
+                  ) : (
+                    <button className="record-btn stop-rec" onClick={stopRecording}>
+                      <span className="rec-square"></span> Stop Recording ({formatSeconds(recordingDuration)})
+                    </button>
+                  )}
 
-              <input
-                type="file"
-                accept=".wav,.mp3,.ogg,.flac,.aac,.m4a,audio/*"
-                onChange={(e) => {
-                  setAudioFile(e.target.files?.[0] || null);
-                  setTranscriptionStatus("");
-                }}
-              />
-
-              {audioFile && (
-                <p style={{ marginTop: "12px" }}>
-                  Selected: {audioFile.name}
-                </p>
-              )}
-
-              <button
-                className="generate-button"
-                onClick={transcribeAudio}
-                disabled={!audioFile || transcribing}
-                style={{ marginTop: "18px" }}
-              >
-                {transcribing
-                  ? "Transcribing..."
-                  : "◉ Transcribe voice note"}
-                <span>↗</span>
-              </button>
-
-              {transcriptionStatus && (
-                <p
-                  style={{
-                    marginTop: "14px",
-                    fontSize: "14px",
-                    lineHeight: "1.5"
-                  }}
-                  role="status"
-                >
-                  {transcriptionStatus}
-                </p>
-              )}
-            </div>
-          )}
-
-          {/* Message composer */}
-          <div className="composer">
-            <label>
-              {activeTab === "voice"
-                ? "TRANSCRIBED MESSAGE"
-                : "WHAT DID THEY SAY?"}
-            </label>
-
-            <textarea
-              value={message}
-              onChange={(e) => {
-                setMessage(e.target.value);
-                setReplies([]);
-                setGenerationError("");
-              }}
-              placeholder={
-                activeTab === "voice"
-                  ? "Your transcription will appear here..."
-                  : "Paste a message or conversation here..."
-              }
-            />
-
-            <div className="composer-footer">
-              <span>
-                Only share conversations you have permission to use.
-              </span>
-
-              <span>{message.length} characters</span>
-            </div>
-          </div>
-
-          {/* Tone selection */}
-          <div className="tone-section">
-            <label>HOW WOULD YOU LIKE TO RESPOND?</label>
-
-            <div className="tone-options">
-              {[
-                "Natural",
-                "Playful",
-                "Thoughtful",
-                "Flirty"
-              ].map((item) => (
-                <button
-                  key={item}
-                  className={`tone-button ${
-                    tone === item ? "selected" : ""
-                  }`}
-                  onClick={() => {
-                    setTone(item);
-                    setReplies([]);
-                  }}
-                >
-                  {item}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Generate button */}
-          <button
-            className="generate-button"
-            onClick={generateReplies}
-            disabled={!message.trim() || generating}
-          >
-            {generating
-              ? "Finding your words..."
-              : "✳  Find my words"}
-            <span>↗</span>
-          </button>
-
-          {/* Generation error */}
-          {generationError && (
-            <div
-              role="alert"
-              style={{
-                marginTop: "18px",
-                padding: "14px",
-                borderRadius: "10px",
-                background: "#fff0f0",
-                color: "#b42318",
-                fontSize: "14px",
-                lineHeight: "1.5"
-              }}
-            >
-              {generationError}
-            </div>
-          )}
-
-          {/* Generated replies */}
-          {replies.length > 0 && (
-            <div
-              style={{
-                marginTop: "32px",
-                display: "grid",
-                gap: "16px"
-              }}
-            >
-              <div>
-                <h2>Your suggested replies.</h2>
-                <p style={{ fontSize: "13px", color: "#777" }}>
-                  Generated using {provider}.
-                  Choose the one that sounds most like you.
-                </p>
+                  {recordedUrl && !isRecording && (
+                    <div className="audio-preview">
+                      <audio controls src={recordedUrl} />
+                      <button
+                        className="generate-button transcribe-sub-btn"
+                        onClick={() => handleTranscribe()}
+                        disabled={transcribing}
+                      >
+                        {transcribing ? "Transcribing..." : "Transcribe Recording ↗"}
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
 
-              {replies.map((reply, index) => (
-                <div
-                  key={index}
-                  style={{
-                    padding: "20px",
-                    border: "1px solid #e8e5e0",
-                    borderRadius: "14px",
-                    background: "#fff"
+              {/* File Upload Audio */}
+              <div className="composer voice-card" style={{ marginTop: "20px" }}>
+                <label>OPTION 2: UPLOAD AUDIO FILE</label>
+                <input
+                  type="file"
+                  accept=".wav,.mp3,.ogg,.flac,.aac,.m4a,.webm,audio/*"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0] || null;
+                    setAudioFile(file);
+                    setTranscriptionStatus("");
+                    setTranscriptionResult(null);
                   }}
+                  className="file-input"
+                />
+
+                {audioFile && (
+                  <div className="file-info">
+                    <span>
+                      Selected: <strong>{audioFile.name}</strong> ({(audioFile.size / 1024 / 1024).toFixed(2)} MB)
+                    </span>
+                    <button
+                      className="generate-button transcribe-sub-btn"
+                      onClick={() => handleTranscribe(audioFile, audioFile.name)}
+                      disabled={transcribing}
+                    >
+                      {transcribing ? "Transcribing..." : "Transcribe File ↗"}
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Transcription Status */}
+              {transcriptionStatus && (
+                <div className="transcription-status-box" role="status">
+                  {transcribing && <span className="spinner"></span>}
+                  <span>{transcriptionStatus}</span>
+                </div>
+              )}
+
+              {/* Transcription Result Card */}
+              {transcriptionResult && (
+                <div className="transcription-result-card">
+                  <div className="result-header">
+                    <h3>Transcription Output</h3>
+                    {transcriptionResult.language && (
+                      <span className="lang-tag">Language: {transcriptionResult.language}</span>
+                    )}
+                  </div>
+                  <p className="transcript-text">{transcriptionResult.text}</p>
+                  <div className="transcript-actions">
+                    <button className="apply-btn" onClick={() => applyTranscription("wingman")}>
+                      Use in Wingman (Generate Replies) ↗
+                    </button>
+                    <button className="apply-btn outline" onClick={() => applyTranscription("coach")}>
+                      Analyze in Coach ↗
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 2 & 3: WINGMAN & COACH COMPOSER */}
+          {activeTab !== "voice" && (
+            <>
+              {/* Message Input Box */}
+              <div className="composer">
+                <label>
+                  {activeTab === "wingman" ? "WHAT DID THEY SAY?" : "CONVERSATION SNIPPET / MESSAGE"}
+                </label>
+
+                <textarea
+                  value={message}
+                  onChange={(e) => {
+                    setMessage(e.target.value);
+                    setGenerationError("");
+                    setCoachError("");
+                  }}
+                  placeholder={
+                    activeTab === "wingman"
+                      ? "Paste the text you received (e.g., 'What are you up to this weekend?')..."
+                      : "Paste the message or exchange you want to analyze..."
+                  }
+                  maxLength={5000}
+                />
+
+                <div className="composer-footer">
+                  <span>Only share conversations you have permission to use.</span>
+                  <span>{message.length} / 5000 characters</span>
+                </div>
+              </div>
+
+              {/* Collapsible Context Section */}
+              <div className="context-accordion">
+                <button
+                  type="button"
+                  className="accordion-toggle"
+                  onClick={() => setShowContext(!showContext)}
                 >
-                  <div
-                    style={{
-                      fontSize: "12px",
-                      color: "#888",
-                      marginBottom: "10px",
-                      letterSpacing: "1px"
-                    }}
-                  >
-                    OPTION {index + 1}
+                  <span>{showContext ? "▼ Hide conversation context" : "▶ Add optional context (chat history, profiles)"}</span>
+                  <span className="context-hint">{showContext ? "Less" : "Tune tone & accuracy"}</span>
+                </button>
+
+                {showContext && (
+                  <div className="accordion-content">
+                    <div className="context-field">
+                      <label>RECENT CHAT HISTORY (Optional)</label>
+                      <textarea
+                        rows={2}
+                        value={chatHistory}
+                        onChange={(e) => setChatHistory(e.target.value)}
+                        placeholder="Oldest to newest messages..."
+                      />
+                    </div>
+                    <div className="context-grid">
+                      <div className="context-field">
+                        <label>ABOUT THEM (Optional)</label>
+                        <input
+                          type="text"
+                          value={theirProfile}
+                          onChange={(e) => setTheirProfile(e.target.value)}
+                          placeholder="e.g. Loves dogs, works in tech, witty"
+                        />
+                      </div>
+                      <div className="context-field">
+                        <label>ABOUT ME (Optional)</label>
+                        <input
+                          type="text"
+                          value={myProfile}
+                          onChange={(e) => setMyProfile(e.target.value)}
+                          placeholder="e.g. Hiking, musician, busy weekdays"
+                        />
+                      </div>
+                    </div>
+                    {activeTab === "wingman" && (
+                      <div className="context-field">
+                        <label>MY TEXTING STYLE (Optional)</label>
+                        <input
+                          type="text"
+                          value={myStyle}
+                          onChange={(e) => setMyStyle(e.target.value)}
+                          placeholder="e.g. Short sentences, lowercase, dry humor"
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* WINGMAN SPECIFIC: TONE SELECTION & GENERATE */}
+              {activeTab === "wingman" && (
+                <>
+                  <div className="tone-section">
+                    <label>HOW WOULD YOU LIKE TO RESPOND?</label>
+                    <div className="tone-options">
+                      {(["Natural", "Playful", "Thoughtful", "Flirty"] as ToneType[]).map((item) => (
+                        <button
+                          key={item}
+                          className={`tone-button ${tone === item ? "selected" : ""}`}
+                          onClick={() => {
+                            setTone(item);
+                            setReplies([]);
+                          }}
+                        >
+                          {item}
+                        </button>
+                      ))}
+                    </div>
                   </div>
 
-                  <p
-                    style={{
-                      fontSize: "17px",
-                      lineHeight: "1.6",
-                      color: "#292929",
-                      margin: "0 0 12px"
-                    }}
-                  >
-                    {reply.text}
-                  </p>
-
-                  <p
-                    style={{
-                      fontSize: "13px",
-                      color: "#888",
-                      margin: "0 0 16px"
-                    }}
-                  >
-                    {reply.explanation}
-                  </p>
-
                   <button
-                    onClick={() => copyReply(reply.text)}
-                    style={{
-                      padding: "9px 16px",
-                      border: "1px solid #ddd",
-                      borderRadius: "8px",
-                      background: "#fff",
-                      cursor: "pointer",
-                      color: "#333"
-                    }}
+                    className="generate-button"
+                    onClick={handleGenerate}
+                    disabled={!message.trim() || generating}
                   >
-                    Copy reply
+                    {generating ? (
+                      <>
+                        <span>Finding your words...</span>
+                        <span className="spinner light"></span>
+                      </>
+                    ) : (
+                      <>
+                        <span>✳ Find my words</span>
+                        <span>↗</span>
+                      </>
+                    )}
                   </button>
-                </div>
-              ))}
-            </div>
+
+                  {generationError && (
+                    <div role="alert" className="error-banner">
+                      <span>⚠</span> {generationError}
+                    </div>
+                  )}
+
+                  {/* Generated Replies Output */}
+                  {replies.length > 0 && (
+                    <div className="replies-grid">
+                      <div className="replies-header">
+                        <h2>Your suggested replies.</h2>
+                        <p>
+                          Generated via {provider}. Choose the one that sounds most like you.
+                        </p>
+                      </div>
+
+                      {replies.map((reply, index) => (
+                        <div key={index} className="reply-card">
+                          <div className="reply-card-header">
+                            <span className="option-badge">OPTION {index + 1}</span>
+                            <span className="tone-badge">{reply.tone}</span>
+                          </div>
+
+                          <p className="reply-text">"{reply.text}"</p>
+                          <p className="reply-explanation">{reply.explanation}</p>
+
+                          <div className="reply-actions">
+                            <button className="copy-btn" onClick={() => copyReply(reply.text)}>
+                              📋 Copy reply
+                            </button>
+                            <span className="word-count">
+                              {countWords(reply.text)} words
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* COACH SPECIFIC: ANALYZE & DISPLAY COACHING INSIGHTS */}
+              {activeTab === "coach" && (
+                <>
+                  <button
+                    className="generate-button"
+                    onClick={handleCoach}
+                    disabled={!message.trim() || coaching}
+                    style={{ marginTop: "24px" }}
+                  >
+                    {coaching ? (
+                      <>
+                        <span>Analyzing conversation dynamics...</span>
+                        <span className="spinner light"></span>
+                      </>
+                    ) : (
+                      <>
+                        <span>◈ Analyze Conversation</span>
+                        <span>↗</span>
+                      </>
+                    )}
+                  </button>
+
+                  {coachError && (
+                    <div role="alert" className="error-banner">
+                      <span>⚠</span> {coachError}
+                    </div>
+                  )}
+
+                  {coachData && (
+                    <div className="coach-results">
+                      <div className="coach-header">
+                        <h2>Conversation Breakdown</h2>
+                        <span className="provider-tag">Powered by {coachData.provider}</span>
+                      </div>
+
+                      <div className="coach-metrics">
+                        <div className="metric-box">
+                          <label>OVERALL VIBE</label>
+                          <p className="metric-val">{coachData.vibe}</p>
+                        </div>
+                        <div className="metric-box">
+                          <label>PERCEIVED INTEREST</label>
+                          <span className={`interest-badge ${coachData.interest_level.toLowerCase()}`}>
+                            {coachData.interest_level}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="coach-card">
+                        <div className="coach-card-title">
+                          <span>🔍</span> What They Actually Mean (Subtext)
+                        </div>
+                        <p>{coachData.subtext}</p>
+                      </div>
+
+                      <div className="coach-card highlight">
+                        <div className="coach-card-title">
+                          <span>🎯</span> Recommended Tactical Strategy
+                        </div>
+                        <p>{coachData.recommended_strategy}</p>
+                      </div>
+
+                      {coachData.avoid && coachData.avoid.length > 0 && (
+                        <div className="coach-card warning">
+                          <div className="coach-card-title">
+                            <span>🚫</span> What to Avoid
+                          </div>
+                          <ul className="avoid-list">
+                            {coachData.avoid.map((item, idx) => (
+                              <li key={idx}>{item}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      <div className="coach-footer-action">
+                        <button
+                          className="generate-button"
+                          onClick={() => {
+                            setActiveTab("wingman");
+                            showToast("Switched to Wingman. Choose your tone to generate replies!");
+                          }}
+                        >
+                          <span>Generate replies based on this strategy</span>
+                          <span>↗</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </>
           )}
 
           <div className="bottom-note">
             <span>✦</span>
             Your voice. Your choice. Always.
-          </div>
-
-          {/* Backend connection test */}
-          <div
-            style={{
-              marginTop: "24px",
-              textAlign: "center",
-              padding: "15px"
-            }}
-          >
-            <button
-              onClick={testBackend}
-              disabled={testing}
-              style={{
-                padding: "12px 24px",
-                borderRadius: "10px",
-                border: "1px solid #ddd",
-                cursor: testing ? "wait" : "pointer",
-                background: "#fff",
-                color: "#333"
-              }}
-            >
-              {testing
-                ? "Testing connection..."
-                : "Test Backend Connection"}
-            </button>
-
-            <p style={{ marginTop: "10px" }}>
-              {connection}
-            </p>
           </div>
         </section>
 

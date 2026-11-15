@@ -1,0 +1,30 @@
+# Version control
+.git
+.gitignore
+
+# Node & Frontend
+node_modules
+dist
+dist-ssr
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python & Backend
+**/__pycache__
+**/*.py[cod]
+backend/venv
+venv
+.venv
+.pytest_cache
+.mypy_cache
+
+# Environment & Secrets
+.env
+.env.*
+backend/.env
+backend/.env.*
+
+# OS files
+.DS_Store
+Thumbs.db
