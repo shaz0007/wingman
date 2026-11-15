@@ -1,6 +1,7 @@
 
 import { useState } from "react";
 import "./App.css";
+import { apiUrl } from "./lib/api";
 
 interface Reply {
   tone: string;
@@ -33,7 +34,7 @@ function App() {
     setConnection("Connecting...");
 
     try {
-      const response = await fetch("http://localhost:8000/api/test");
+      const response = await fetch(apiUrl("/api/test"));
 
       if (!response.ok) {
         throw new Error("Backend request failed");
@@ -63,7 +64,7 @@ function App() {
 
     try {
       const response = await fetch(
-        "http://localhost:8000/api/generate",
+        apiUrl("/api/generate"),
         {
           method: "POST",
           headers: {
@@ -131,7 +132,7 @@ function App() {
       formData.append("audio_file", audioFile);
 
       const response = await fetch(
-        "http://localhost:8000/api/transcribe",
+        apiUrl("/api/transcribe"),
         {
           method: "POST",
           body: formData

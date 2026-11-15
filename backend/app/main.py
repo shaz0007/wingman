@@ -1,7 +1,9 @@
 
-import os
 import json
+import logging
+import os
 import requests
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, UploadFile, File
@@ -12,6 +14,8 @@ from google import genai
 from google.genai import types
 
 load_dotenv()
+
+logger = logging.getLogger("uvicorn.error")
 
 # API CONFIGURATION
 GNANI_API_KEY = os.getenv("GNANI_API_KEY")
@@ -34,16 +38,53 @@ app = FastAPI(
     version="1.0.0"
 )
 
+def get_allowed_origins() -> list[str]:
+    """Read comma-separated browser origins; default to local Vite dev origins."""
+    configured_origins = os.getenv("WEB_ORIGIN") or os.getenv("web_origin")
+
+    if not configured_origins:
+        return [
+            "http://localhost:4000",
+            "http://localhost:5173",
+            "http://localhost:5174",
+        ]
+
+    origins = []
+    for value in configured_origins.split(","):
+        origin = value.strip().rstrip("/")
+        if not origin:
+            continue
+
+        parsed = urlsplit(origin)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+            or origin == "*"
+        ):
+            raise RuntimeError(
+                "WEB_ORIGIN must contain one or more comma-separated "
+                "origins (scheme + host only), for example "
+                "'https://your-app.vercel.app'."
+            )
+
+        if origin not in origins:
+            origins.append(origin)
+
+    if not origins:
+        raise RuntimeError("WEB_ORIGIN must contain at least one valid origin.")
+
+    return origins
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:4000",
-        "http://localhost:5173",
-        "http://localhost:5174"
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=get_allowed_origins(),
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 # DATA MODELS
@@ -340,7 +381,7 @@ def generate_replies(request: GenerateRequest):
     try:
         replies = generate_with_gemini(prompt, request.tone)
 
-        print("Provider used: Gemini")
+        logger.info("AI provider used: Gemini")
 
         return {
             "success": True,
@@ -349,14 +390,13 @@ def generate_replies(request: GenerateRequest):
         }
 
     except Exception as gemini_error:
-        print("Gemini failed:", str(gemini_error))
-        print("Switching to Groq immediately...")
+        logger.warning("Gemini generation failed; attempting Groq fallback", exc_info=True)
 
     # Try Groq immediately if Gemini fails.
     try:
         replies = generate_with_groq(prompt, request.tone)
 
-        print("Provider used: Groq")
+        logger.info("AI provider used: Groq")
 
         return {
             "success": True,
@@ -365,7 +405,7 @@ def generate_replies(request: GenerateRequest):
         }
 
     except Exception as groq_error:
-        print("Groq failed:", str(groq_error))
+        logger.error("Groq generation failed", exc_info=True)
 
         raise HTTPException(
             status_code=502,
