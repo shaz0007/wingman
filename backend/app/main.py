@@ -100,7 +100,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 # ---------------- Routes ----------------
 
 
-@app.get("/", tags=["Info"])
+@app.api_route("/", methods=["GET", "HEAD"], tags=["Info"])
 def root():
     return {
         "message": "Welcome to WINGMAN API",
@@ -109,7 +109,7 @@ def root():
     }
 
 
-@app.get("/health", response_model=HealthResponse, tags=["Health"])
+@app.api_route("/health", methods=["GET", "HEAD"], response_model=HealthResponse, tags=["Health"])
 def health_check():
     return HealthResponse(
         status="healthy",

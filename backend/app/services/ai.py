@@ -206,7 +206,10 @@ def call_gemini(prompt: str) -> str:
         from google import genai
         from google.genai import types
 
-        client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        client = genai.Client(
+            api_key=settings.GEMINI_API_KEY,
+            http_options=types.HttpOptions(timeout=15000),
+        )
         response = client.models.generate_content(
             model=settings.GEMINI_MODEL,
             contents=prompt,
@@ -214,8 +217,7 @@ def call_gemini(prompt: str) -> str:
                 temperature=1.0,
                 top_p=0.95,
                 response_mime_type="application/json"
-            ),
-            http_options=types.HttpOptions(timeout=15000)
+            )
         )
         if not response.text:
             raise RuntimeError("Gemini returned an empty response.")
