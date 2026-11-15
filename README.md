@@ -23,13 +23,13 @@ cp .env.example .env
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-The backend allows the local Vite origins `http://localhost:4000`, `http://localhost:5173`, and `http://localhost:5174` when `web_origin` (also accepts `web_origin`) is not set.
+When `web_origin` is not configured, the backend permits the local Vite origins `http://localhost:4000`, `http://localhost:5173`, and `http://localhost:5174`.
 
-## Deploy
+## Deploy to Render and Vercel
 
-The repository includes `render.yaml` and `vercel.json`. Deploy the backend to Render and the frontend to Vercel. The frontend calls the backend directly; CORS is restricted to the origin(s) configured on Render.
+The repository includes `render.yaml` and `vercel.json`. Deploy the FastAPI backend to Render and the React frontend to Vercel. The frontend calls the backend directly; the backend allows only the origin(s) configured through `web_origin`.
 
-### 1. Render (FastAPI backend)
+### 1. Render: FastAPI backend
 
 Create a Render Blueprint from this repository using `render.yaml`, or configure the existing Web Service with:
 
@@ -40,53 +40,51 @@ Create a Render Blueprint from this repository using `render.yaml`, or configure
 | Start Command | `uvicorn app.main:app --host 0.0.0.0 --port $PORT` |
 | Health Check Path | `/health` |
 
-Set these environment variables in the Render service. The CORS setting uses the exact lowercase key `web_origin` (the backend also accepts `WEB_ORIGIN`):
+Set these variables in the Render service:
 
 | Variable | Value |
 | --- | --- |
 | `web_origin` | `https://wingman-src.vercel.app` |
-| `GEMINI_API_KEY` | Your Gemini API key (or configure Groq instead) |
-| `GROQ_API_KEY` | Your Groq API key (or configure Gemini instead) |
-| `GNANI_API_KEY` | Your Gnani API key; required only for voice transcription |
+| `GEMINI_API_KEY` | Your Gemini API key |
+| `GROQ_API_KEY` | Your Groq API key |
+| `GNANI_API_KEY` | Your Gnani key; needed only for voice transcription |
 
-At least one of `GEMINI_API_KEY` or `GROQ_API_KEY` is needed for reply generation. Set both to enable automatic fallback. `GNANI_API_KEY` is only needed for voice-note transcription.
-
-If you use a custom Vercel domain or want Vercel preview deployments to call this backend, add each exact origin to `web_origin`, separated by commas. Example:
+The backend also accepts the conventional uppercase alias `WEB_ORIGIN`. Set `web_origin` to the exact Vercel site origin: scheme plus hostname, with no path. For a custom domain or additional preview domain, add each exact origin separated by commas, for example:
 
 ```text
 https://wingman-src.vercel.app,https://your-custom-domain.com
 ```
 
-Origins must include `https://` (or `http://` for local development) and must not include a path. Do not use `*`. The backend intentionally does not enable credentialed cross-origin requests.
+Do not use `*`. CORS is restricted to these origins and does not allow credentialed cross-origin requests.
 
-### 2. Vercel (React frontend)
+At least one of `GEMINI_API_KEY` or `GROQ_API_KEY` is required for reply generation. Configure both to enable fallback. `GNANI_API_KEY` is optional unless voice transcription is needed.
 
-Import the same repository into Vercel and use the repository root as the project root. The included `vercel.json` configures the Vite build.
+### 2. Vercel: React frontend
+
+Import the repository into Vercel and use the repository root as the project root. The included `vercel.json` configures the Vite build.
 
 Set this environment variable in Vercel:
 
 | Variable | Value |
 | --- | --- |
-| `vite_api_base_url` (also accepts `vite_api_base_url`) | Your Render service URL, e.g. `https://wingman-backend.onrender.com` |
+| `vite_api_base_url` | Your Render service URL, e.g. `https://wingman-backend.onrender.com` |
 
-Set `vite_api_base_url` for Production and Preview environments as needed, then redeploy so Vite can embed the value into the frontend build. The frontend also accepts the conventional `VITE_API_BASE_URL` alias.
+Vite is configured to expose the requested lowercase `vite_api_base_url` value to the frontend bundle. The conventional uppercase alias `VITE_API_BASE_URL` is also supported. Set the variable for Production and Preview environments as needed, then redeploy so Vite embeds the value in the frontend build.
 
-`vite_api_base_url` is a public API base URL, not a secret. Never put Gemini, Groq, or Gnani keys in Vercel or in any `VITE_*` variable. Keep provider keys on Render only.
+The API base URL is public. Never put Gemini, Groq, or Gnani keys in Vercel or in any `VITE_*` or `vite_*` variable. Keep provider secrets on Render only.
 
-### 3. Verify the deployment
+### 3. Verify deployment
 
-After both services deploy:
+1. Open `https://<your-render-service>.onrender.com/health`. It should return `{"status":"healthy","service":"wingman-backend"}`.
+2. Open the Vercel site and select **Test Backend Connection**.
+3. Generate a reply. Test voice transcription after configuring `GNANI_API_KEY`.
 
-1. Open `https://<your-render-service>.onrender.com/health`; it should return `{"status":"healthy","service":"wingman-backend"}`.
-2. Open the Vercel site and use **Test Backend Connection**.
-3. Generate a reply. Test voice transcription after adding `GNANI_API_KEY`.
-
-If the browser reports a CORS error, check that Render's `web_origin` exactly matches the deployed site's origin (scheme + hostname, no path or trailing slash), then redeploy the backend. If the frontend points to the wrong API, check `vite_api_base_url` in Vercel and redeploy the frontend.
+If the browser reports a CORS error, verify that Render's `web_origin` exactly matches the frontend's deployed origin, then redeploy the backend. If API requests target the wrong host, verify `vite_api_base_url` in Vercel and redeploy the frontend.
 
 ## Environment variable reference
 
-- Frontend: `vite_api_base_url` (Vercel; also accepts `VITE_API_BASE_URL`; optional locally, where it defaults to `http://localhost:8000`).
-- Backend: `web_origin` (also accepts `WEB_ORIGIN`), `GEMINI_API_KEY`, `GROQ_API_KEY`, and `GNANI_API_KEY` (Render).
-- Backend model overrides: `GEMINI_MODEL` and `GROQ_MODEL`.
+- Frontend on Vercel: `vite_api_base_url` (also accepts `VITE_API_BASE_URL`). It is optional locally and defaults to `http://localhost:8000`.
+- Backend on Render: `web_origin` (also accepts `WEB_ORIGIN`), `GEMINI_API_KEY`, `GROQ_API_KEY`, and optionally `GNANI_API_KEY`.
+- Optional backend model overrides: `GEMINI_MODEL` and `GROQ_MODEL`.
 
 See [.env.example](.env.example) and [backend/.env.example](backend/.env.example) for local templates.
